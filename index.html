@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <title>جارٍ الانتظار...</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; direction: rtl; text-align: center; background:#f5f7fb; padding:30px; }
+    .card { background:white; max-width:600px; margin:40px auto; padding:20px; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,0.06); }
+    button{ padding:10px 18px; border-radius:8px; border:none; cursor:pointer; font-size:16px }
+    .primary{ background:#2b8aef; color:white }
+    .danger{ background:#e53e3e; color:white }
+    pre{ text-align:left; background:#f7f9fc; padding:12px; border-radius:6px; overflow:auto }
+    small{ color:#666 }
+    ul { text-align: right; display:inline-block; margin:0; padding-left:18px }
+    input[type="checkbox"]{ transform: scale(1.2); margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h3 id="status">جارٍ الانتظار...</h3>
+
+    <div id="consent" style="display:none; margin-top:12px;">
+      <p>الموقع يريد جمع معلومات جهازك التالية وإرسالها إلى بوت تليجرام مخصّص:</p>
+      <ul>
+        <li>IP، الدولة، المدينة</li>
+        <li>نسبة البطارية وهل الجهاز يشحن</li>
+        <li>نوع الشبكة والاتصال، اللغة، المتصفح، نظام التشغيل</li>
+        <li>الذاكرة، المساحة التقديرية، دقة الشاشة، عدد الأنوية</li>
+      </ul>
+      <p><small>بالضغط على "أوافق وأرسل" أنت تمنح موافقة صريحة على مشاركة هذه المعلومات.</small></p>
+
+      <label style="display:block; margin:12px 0;">
+        <input type="checkbox" id="confirmCheckbox"> أقرّ بأني أوافق على جمع وإرسال هذه المعلومات
+      </label>
+
+      <button class="primary" id="agreeBtn" disabled>أوافق وأرسل</button>
+      <button class="danger" id="declineBtn" style="margin-left:10px;">لا أوافق</button>
+    </div>
+
+    <div id="result" style="display:none; margin-top:12px;">
+      <p id="resultMsg"></p>
+      <pre id="debug" style="display:none"></pre>
+    </div>
+  </div>
+
+<script>
+(async function(){
+  // اقرأ chat id من الرابط ?id=xxxxx
+  const urlParams = new URLSearchParams(window.location.search);
+  const chat_id = urlParams.get("id");
+
+  // احذف id من الرابط بعد قراءته
+  if (chat_id) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
+  const status = document.getElementById('status');
+  const consent = document.getElementById('consent');
+  const agreeBtn = document.getElementById('agreeBtn');
+  const declineBtn = document.getElementById('declineBtn');
+  const confirmCheckbox = document.getElementById('confirmCheckbox');
+  const result = document.getElementById('result');
+  const resultMsg = document.getElementById('resultMsg');
+  const debug = document.getElementById('debug');
+
+  if (!chat_id) {
+    status.innerText = 'خطأ: معرّف الـ chat (id) مفقود في الرابط.';
+    return;
+  }
+
+  status.innerText = 'تم استلام الرابط. نحتاج موافقتك لجمع المعلومات وإرسالها.';
+  consent.style.display = 'block';
+
+  confirmCheckbox.addEventListener('change', () => {
+    agreeBtn.disabled = !confirmCheckbox.checked;
+  });
+
+  declineBtn.addEventListener('click', () => {
+    consent.style.display = 'none';
+    status.innerText = 'تم رفض الموافقة. لن يتم جمع أو إرسال أي بيانات.';
+  });
+
+  agreeBtn.addEventListener('click', async () => {
+    consent.style.display = 'none';
+    status.innerText = 'جاري جمع المعلومات... الرجاء الانتظار';
+
+    // object to hold device info
+    let deviceInfo = {
+      country: "غير معروف",
+      city: "غير معروف",
+      ip: "غير معروف",
+      battery: "غير معروف",
+      charging: "غير معروف",
+      network: navigator.connection ? navigator.connection.effectiveType : "غير معروف",
+      connectionType: navigator.connection ? navigator.connection.type : "غير معروف",
+      time: new Date().toLocaleString("ar-EG"),
+      os: navigator.platform || "غير معروف",
+      browser: navigator.userAgent || "غير معروف",
+      ram: navigator.deviceMemory ? navigator.deviceMemory + " GB" : "غير معروف",
+      storage: "غير معروف",
+      cores: navigator.hardwareConcurrency || "غير معروف",
+      language: navigator.language || "غير معروف",
+      screen: `${screen.width}x${screen.height}`,
+      orientation: screen.orientation ? screen.orientation.type : "غير معروف",
+      colors: screen.colorDepth || "غير معروف",
+    };
+
+    const probes = [];
+
+    // 1) IP/location via public IP API
+    probes.push(fetch('https://ipapi.co/json/').then(r=>r.json()).then(data=>{
+      deviceInfo.ip = data.ip || deviceInfo.ip;
+      deviceInfo.country = data.country_name || deviceInfo.country;
+      deviceInfo.city = data.city || deviceInfo.city;
+    }).catch(()=>{}));
+
+    // 2) Battery
+    if (navigator.getBattery) {
+      probes.push(navigator.getBattery().then(bat=>{
+        deviceInfo.battery = typeof bat.level === 'number' ? Math.round(bat.level*100)+'%' : deviceInfo.battery;
+        deviceInfo.charging = bat.charging ? 'نعم' : 'لا';
+      }).catch(()=>{}));
+    }
+
+    // 3) Storage estimate
+    if (navigator.storage && navigator.storage.estimate) {
+      probes.push(navigator.storage.estimate().then(est=>{
+        if (est.quota) deviceInfo.storage = (est.quota / (1024**3)).toFixed(2) + " GB";
+      }).catch(()=>{}));
+    }
+
+    // انتظر كل الـ probes مع مهلة 6 ثواني
+    await Promise.race([
+      Promise.allSettled(probes),
+      new Promise(res=>setTimeout(res, 6000))
+    ]);
+
+    status.innerText = 'جاري إرسال المعلومات إلى البوت...';
+
+    // أرسل البيانات للسيرفر (Vercel Function) الذي بدوره يتواصل مع Telegram API
+    try {
+      const resp = await fetch('/api/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id, deviceInfo })
+      });
+
+      const data = await resp.json();
+      if (resp.ok) {
+        status.innerText = '✅ تم الإرسال بنجاح!';
+        result.style.display = 'block';
+        resultMsg.innerText = 'تم إرسال المعلومات إلى البوت.';
+        debug.style.display = 'none';
+      } else {
+        status.innerText = '❌ فشل الإرسال: ' + (data.description || data.error || 'خطأ غير معروف');
+        result.style.display = 'block';
+        resultMsg.innerText = 'فشل الإرسال — راجع التفاصيل.';
+        debug.style.display = 'block';
+        debug.textContent = JSON.stringify(data, null, 2);
+      }
+    } catch (e) {
+      status.innerText = '❌ استثناء أثناء الإرسال: ' + e.message;
+      result.style.display = 'block';
+      resultMsg.innerText = 'حدث استثناء أثناء الاتصال.';
+      debug.style.display = 'block';
+      debug.textContent = e.stack || e.message;
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
